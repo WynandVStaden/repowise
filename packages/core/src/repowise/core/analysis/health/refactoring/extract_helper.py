@@ -139,8 +139,25 @@ _DECL_LINE = re.compile(
         | (async\s+)?(def|function|fn|func|class|interface|type|struct)\s+[\w<>]+\s*[(<{:]?\s*
         | (async\s+)?(def|function|fn|func|class|interface|type|struct)\s+[\w<>]+\s*
             \( (?: [^()] | \([^()]*\) )* \)      # its parameter list, and nothing past it
-            \s* (->[^:{;]*)? \s* [:{]? \s*     # a signature joined back whole
+            \s* (->[^:{;]*)? \s*               # a signature joined back whole,
+            (: \s* \.\.\. | [:{])? \s*          # or a stub whose whole body is `...`
         | @[\w.]+ \s* \(?                       # decorator / annotation
+    )$""",
+    re.VERBOSE,
+)
+# A declaration head whose parameter list is still open where the block ends: a
+# clone window can stop at the last parameter two signatures share, before the
+# closing `) -> T:` line. Only the parameters themselves may follow the `(`.
+_OPEN_DECL_HEAD = re.compile(
+    r"^\s*(async\s+)?(def|function|fn|func|class|interface)\s+[\w<>]+\s*\((?P<params>.*)$"
+)
+# One parameter: `name`, `name: type`, `name: type = default`, `*args`, `**kw`,
+# a bare `*` or `/`, an optional `name?: type`, or Go's `name type`.
+_PARAM = re.compile(
+    r"""^(
+        (\.\.\.)? \*{0,2} &? (mut\s+)? [\w$]+ \?? \s* (: [^=]*)? (= .+)?
+        | [\w$]+ \s+ [\w.*\[\]&]+
+        | [*/]
     )$""",
     re.VERBOSE,
 )
@@ -189,6 +206,40 @@ def _continuation_depth(line: str) -> int:
     bare = _STRING_LITERAL.sub("", line)
     bare = _TRAILING_COMMENT.sub("", bare)
     return sum(bare.count(o) - bare.count(c) for o, c in ("()", "[]"))
+
+
+def _is_open_declaration_head(line: str) -> bool:
+    """True when *line* is a ``def``/``class``/... head cut off inside its
+    parameter list, with nothing but parameters after the ``(``.
+
+    Only a line still open at the end of the block qualifies, so a statement
+    folded into it by ``_logical_lines`` (``def f( emit(a)``) has to read as a
+    parameter to pass, and does not.
+    """
+    if _continuation_depth(line) <= 0:
+        return False
+    m = _OPEN_DECL_HEAD.match(line)
+    if m is None:
+        return False
+    params = _split_top_level(m.group("params"))
+    return all(_PARAM.match(p) for p in params if p)
+
+
+def _split_top_level(text: str) -> list[str]:
+    """*text* split on the commas outside any bracket, each piece stripped."""
+    pieces: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            pieces.append(text[start:i].strip())
+            start = i + 1
+    pieces.append(text[start:].strip())
+    return pieces
 
 
 def _code_lines(block: list[str]) -> list[str]:
@@ -248,7 +299,7 @@ def _is_declaration_only(block: list[str]) -> bool:
             continue
         if _TABLE_DECL.match(line) or _DUNDER_ATTR.match(line):
             continue
-        if _DECL_LINE.match(line):
+        if _DECL_LINE.match(line) or _is_open_declaration_head(line):
             continue
         # An assignment is a declaration only by what it assigns. A constant
         # RHS is inert either way; an annotated line may additionally use a
