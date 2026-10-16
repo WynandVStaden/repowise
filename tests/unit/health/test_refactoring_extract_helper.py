@@ -761,7 +761,12 @@ def test_declaration_only_unit_cases():
     )
     assert _is_declaration_only(["function render(", "  node: Node,", "  opts?: Options,"])
     assert _is_declaration_only(["func Detect(", "\tfiles []File,", "\twindow int,"])
+    # A comma in a string default or a trailing comment separates no parameters.
+    assert _is_declaration_only(["def f(", '    label: str = "a,b",', "    x: int = 1,"])
+    assert _is_declaration_only(["def f(", "    x: int,  # rows, not bytes", "    y: int,"])
+    assert _is_declaration_only(["def f(", "    sep: str = '#',", "    y: int,"])
     # An open head followed by a statement is not a signature.
+    assert not _is_declaration_only(["def f(", "    emit(a),  # one, two", "    y: int,"])
     assert not _is_declaration_only(["def f(", "    x: int,", "    return g(x)"])
     assert not _is_declaration_only(["def f(", "    emit(a)", "    emit(b)"])
 

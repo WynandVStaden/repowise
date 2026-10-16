@@ -225,8 +225,18 @@ def _is_open_declaration_head(line: str) -> bool:
     return all(_PARAM.match(p) for p in params if p)
 
 
+def _strip_trailing_comment(line: str) -> str:
+    """*line* without a trailing ``#``/``//`` comment; one inside a string stays."""
+    masked = _STRING_LITERAL.sub(lambda s: "_" * len(s.group(0)), line)
+    found = re.search(r"#|//", masked)
+    return line[: found.start()].rstrip() if found else line
+
+
 def _split_top_level(text: str) -> list[str]:
-    """*text* split on the commas outside any bracket, each piece stripped."""
+    """*text* split on the commas outside any bracket or string, each piece
+    stripped. A string's contents are blanked first (``"a,b"`` -> ``""``), so
+    a comma or bracket in a default value is not read as syntax."""
+    text = _STRING_LITERAL.sub('""', text)
     pieces: list[str] = []
     depth = 0
     start = 0
@@ -289,17 +299,23 @@ def _is_declaration_only(block: list[str]) -> bool:
     and the defect here is the advice, not the measurement. The block still
     counts as duplication; it just no longer produces a plan to extract it.
     """
-    lines = _logical_lines(_code_lines(block))
+    code = _code_lines(block)
+    lines = _logical_lines(code)
     if not lines:
         return True
-    for line in lines:
+    # Only the last logical line can still be open. It is read for parameters
+    # without its trailing comments, whose commas do not separate anything.
+    open_tail = _logical_lines([_strip_trailing_comment(c) for c in code])[-1]
+    for i, line in enumerate(lines):
         if _CONTROL_FLOW.search(line):
             return False
         if line.startswith(_IMPORT_PREFIXES) or line in ("(", ")", "):", "}", "];", "{"):
             continue
         if _TABLE_DECL.match(line) or _DUNDER_ATTR.match(line):
             continue
-        if _DECL_LINE.match(line) or _is_open_declaration_head(line):
+        if _DECL_LINE.match(line):
+            continue
+        if i == len(lines) - 1 and _is_open_declaration_head(open_tail):
             continue
         # An assignment is a declaration only by what it assigns. A constant
         # RHS is inert either way; an annotated line may additionally use a
